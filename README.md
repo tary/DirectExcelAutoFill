@@ -14,17 +14,10 @@
        
        * ```SetTableName``` 设置表名
        * ```SetKeyName``` 设置查询的Key, 从```FExcelQueryRequest::Result```中取,可以使用前面的查询结果
-       * ```AddColumnQuest(InColumnName, InResultKey)``` 增加查询字段
+       * ```AddColumnQuest(InColumnName, InResultKey)``` 增加查询字段, 以下是查询的过程
        
          1. 在```TableName```的表中查找第一列等于 ```FExcelQueryRequest::Result[FExcelQueryInfo::KeyName]``` 的行号
          2. 找到```InColumnName```列的数据, 并保存在```FExcelQueryRequest::Result[InResultKey]```中
-    
-    ```cpp
-    FExcelQueryInfo MonsterInfo = FExcelQueryInfo(TEXT("Monster")) //表名Monster
-	  .SetKeyName(TEXT("MonsterID")) //查询的Key
-	  .AddColumnQuest(TEXT("AppearanceID"), TEXT("Monster.AppearanceID"))
-	  .AddColumnQuest(TEXT("ModelScaling"), TEXT("ModelScaling"));
-    ```
     
   - SetExcelAutoCompleteData 接受查询结果
   
