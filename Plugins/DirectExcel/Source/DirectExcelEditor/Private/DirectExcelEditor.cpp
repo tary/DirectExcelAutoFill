@@ -75,11 +75,11 @@ public:
             Selection->GetSelectedObjects(AllSelectedActors);
             for (AActor* SelectedActor : AllSelectedActors)
             {
-                if (!SelectedActor)
+                if (!SelectedActor && FExcelAutoFillTool::IsSupportedActor(SelectedActor))
                 {
                     continue;
                 }
-                AutoFillTool->RefreshOnObject(SelectedActor, NAME_None);
+                AutoFillTool->RefreshOnObject(SelectedActor, nullptr);
             }
         }
     }

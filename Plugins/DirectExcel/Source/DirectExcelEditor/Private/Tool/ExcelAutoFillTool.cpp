@@ -1,28 +1,53 @@
 ﻿#include "ExcelAutoFillTool.h"
 
 #include "DirectExcelLibrary.h"
-#include "ExcelAutoConfigInterface.h"
+#include "ExcelQueryTask.h"
 #include "ExcelQueryTypes.h"
 #include "ExcelToolSettings.h"
 #include "ExcelWorkbook.h"
 
 PRAGMA_DISABLE_OPTIMIZATION
 
+bool bUseUseExcelAutoFill = false;
+static FAutoConsoleVariableRef CVarUseExcelAutoFill(
+	TEXT("d.ExcelAutoFill.AutoRefresh"),
+	bUseUseExcelAutoFill,
+	TEXT("打开或关闭属性修改时自动根据属性刷新Excel最新数据, 可能会影响编辑器性能")
+);
 
 void FExcelAutoFillTool::OnRegister()
 {
-	ObjectPropChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FExcelAutoFillTool::OnObjectPropertyChanged);
+	CVarUseExcelAutoFill->SetOnChangedCallback(FConsoleVariableDelegate::CreateSP(this, &FExcelAutoFillTool::OnAutoRefreshStatusChanged));
+	IModularFeatures::Get().RegisterModularFeature(FeatureName, this);
+	if (bUseUseExcelAutoFill)
+	{		
+		ObjectPropChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FExcelAutoFillTool::OnObjectPropertyChanged);
+	}
+	
 	SettingChangedHandle = UExcelToolSettings::OnExcelToolSettingsModify.AddRaw(this, &FExcelAutoFillTool::OnSettingChanged);
 
 	PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(this, &FExcelAutoFillTool::OnPostEngineInit);
+	
+	QueryTask = NewObject<UExcelQueryTask>();
+	QueryTask->AddToRoot();
 }
 
 void FExcelAutoFillTool::OnUnRegister()
 {
+	CVarUseExcelAutoFill->OnChangedDelegate().RemoveAll(this);
+	IModularFeatures::Get().UnregisterModularFeature(FeatureName, this);
+	if (IsValid(QueryTask))
+	{
+		QueryTask->RemoveFromRoot();
+		QueryTask->MarkAsGarbage();
+		QueryTask = nullptr;
+	}
 	AllLoadedSheet.Reset();
 	AllLoadedWorkbook.Reset();
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(ObjectPropChangedHandle);
+	ObjectPropChangedHandle.Reset();
 	UExcelToolSettings::OnExcelToolSettingsModify.Remove(SettingChangedHandle);
+	SettingChangedHandle.Reset();
 	FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
 	bHasEngineInit = false;
 }
@@ -41,6 +66,24 @@ void FExcelAutoFillTool::AddReferencedObjects(FReferenceCollector& Collector)
 	if (!AllRefWorkBook.IsEmpty())
 	{
 		Collector.AddReferencedObjects(AllRefWorkBook);
+	}
+	
+	if (QueryTask)
+	{
+	    Collector.AddReferencedObject(QueryTask);
+	}
+}
+
+void FExcelAutoFillTool::OnAutoRefreshStatusChanged(IConsoleVariable* Var)
+{
+	if (bUseUseExcelAutoFill)
+	{		
+		ObjectPropChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FExcelAutoFillTool::OnObjectPropertyChanged);
+	}
+	else if (ObjectPropChangedHandle.IsValid())
+	{
+		FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(ObjectPropChangedHandle);
+		ObjectPropChangedHandle.Reset();
 	}
 }
 
@@ -122,80 +165,95 @@ void FExcelAutoFillTool::LoadTables()
 	}
 }
 
-void FExcelAutoFillTool::RefreshOnObject(UObject* Object, FName ChangedByProp)
+void FExcelAutoFillTool::RefreshOnObject(UObject* Object, FProperty* InProperty)
 {
-	if (!Object)
+	if (!Object || !QueryTask)
 	{
 		return;
 	}
 	
-	static FExcelQueryRequest CellQueryRequest;
-	if (!Object->GetClass()->ImplementsInterface(UExcelAutoConfigInterface::StaticClass()))
+	UFunction* Function = nullptr;
+	if (UClass* Cls = Object->GetClass())
+	{
+		const FName FuncName = GET_FUNCTION_NAME_CHECKED(UExcelQueryTask, ExcelAutoFillFunc);
+		Function = Cls->FindFunctionByName(FuncName);
+	}
+
+	if (!Function)
+	{
+		//todo log
+		return;
+	}
+
+	if (InProperty && !Function->HasMetaData(InProperty->GetFName()))
 	{
 		return;
 	}
 
-	CellQueryRequest.Result.Reset();
-	CellQueryRequest.QueryList.Reset();
-	if (!IExcelAutoConfigInterface::Execute_GetExcelAutoCompleteData(Object, ChangedByProp, CellQueryRequest))
-	{
-		return;
-	}
+	//const auto QueryFunc = FExcelQueryDelegate::CreateSP(this, &FExcelAutoFillTool::ProcedureQuery);
 
-	for (FExcelQueryInfo& Query : CellQueryRequest.QueryList)
+	const FName PropName = InProperty ? InProperty->GetFName() : NAME_None;
+	QueryTask->ProcessQueryFunc(Object, Function, PropName);
+}
+
+FExcelQueryResultData FExcelAutoFillTool::ProcedureQuery(const FExcelQueryData& QueryData)
+{
+	TMap<FExcelQueryKey, FString> AllResult = QueryData.DefaultData;
+	for (const FExcelQueryInfo& Query : QueryData.QueryList)
 	{
-		if (!CellQueryRequest.Result.Contains(Query.KeyName))
+		if (!AllResult.Contains(Query.Key))
 		{
 			continue;
 		}
-		const FString& CurKey = CellQueryRequest.Result[Query.KeyName];
+		const FString& CurKey = AllResult[Query.Key];
 		if (!AllLoadedSheet.Contains(Query.TableName))
 		{
 			continue;
 		}
 
 		const UExcelWorksheet* LoadedSheet = AllLoadedSheet[Query.TableName];
-		for (const TPair<FName, FName>& ColumnIT : Query.ColumnQuest)
+
+		const UExcelCell* KeyCell = LoadedSheet->FindStringAtColumn(1, CurKey);
+		if (!KeyCell)
 		{
-			const FName ColumnName = ColumnIT.Key;
-			const FName ColumnKey = ColumnIT.Value;
+			continue;
+		}
+		
+		for (const FName& ColumnName : Query.Column)
+		{
 			const int32 TargetColumIdx = LoadedSheet->FindColumnIndex(ColumnName);
 			if (TargetColumIdx < 0)
 			{
 				continue;
 			}
 
-			const UExcelCell* KeyCell = LoadedSheet->FindStringAtColumn(1, CurKey);
-			if (!KeyCell)
-			{
-				continue;
-			}
+			
 			const int32 RowIndex = KeyCell->Row();
 			FExcelCellReference CellReference;
 			CellReference.Column = TargetColumIdx;
 			CellReference.Row = RowIndex;
 			FString Result = LoadedSheet->ToString(CellReference);
-			CellQueryRequest.Result.Add(ColumnKey, MoveTemp(Result));
+			AllResult.Add(FExcelQueryKey(ColumnName, Query.TableName), MoveTemp(Result));
 		}			
 	}
 
-	if (CellQueryRequest.Result.IsEmpty())
-	{
-		return;
-	}
-	IExcelAutoConfigInterface::Execute_SetExcelAutoCompleteData(Object, ChangedByProp, CellQueryRequest);
+	FExcelQueryResultData ResultData;
+	ResultData.Data = MoveTemp(AllResult);
+	return MoveTemp(ResultData);
 }
 
-bool FExcelAutoFillTool::IsSupportedActor(UObject* Object)
+bool FExcelAutoFillTool::IsSupportedActor(AActor* Object)
 {
-	return Object && Object->GetClass()->ImplementsInterface(UExcelAutoConfigInterface::StaticClass());
+	return Object && !Object->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Object->Tags.Contains(ExcelAutoRefreshName);
 }
 
+FName FExcelAutoFillTool::ExcelAutoWatchName = TEXT("ExcelAutoWatch");
+FName FExcelAutoFillTool::ExcelAutoRefreshName = TEXT("ExcelAutoRefresh");
 void FExcelAutoFillTool::OnObjectPropertyChanged(UObject* Object, FPropertyChangedEvent& Event)
 {
 	if (Event.Property && Object)
 	{
-		RefreshOnObject(Object, Event.Property->GetFName());
+		RefreshOnObject(Object, Event.Property);
 	}	
 }
 PRAGMA_ENABLE_OPTIMIZATION

@@ -4,6 +4,40 @@
 #include "ExcelQueryTypes.generated.h"
 
 USTRUCT(BlueprintType)
+struct FExcelQueryKey
+{
+	GENERATED_BODY()
+
+	explicit FExcelQueryKey(FName InKeyName, FName InTableName = NAME_None)
+	 : TableName(InTableName), KeyName(InKeyName)
+	{		
+	}
+
+	FExcelQueryKey() { }
+
+	bool operator==(const FExcelQueryKey& OtherKey) const
+	{
+		return TableName == OtherKey.TableName && KeyName == OtherKey.KeyName;
+	}
+
+	bool operator!=(const FExcelQueryKey& OtherKey) const
+	{
+		return !(*this == OtherKey);
+	}
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName TableName;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName KeyName;
+};
+
+FORCEINLINE uint32 GetTypeHash(const FExcelQueryKey& Key)
+{
+	return ::GetTypeHash(Key.KeyName) + ::GetTypeHash(Key.TableName);
+}
+
+USTRUCT(BlueprintType)
 struct FExcelQueryInfo
 {
 	GENERATED_BODY()
@@ -14,50 +48,49 @@ struct FExcelQueryInfo
 	FExcelQueryInfo(FName InTableName)
 		: TableName(InTableName) {}
 	
-	FExcelQueryInfo(FName InTableName, FName Key, const TMap<FName, FName>& InColumnQuest)
-		: TableName(InTableName), KeyName(Key), ColumnQuest(InColumnQuest) {}
-
-	FExcelQueryInfo& SetTableName(FName InTableName)
-	{
-		TableName = InTableName;
-		return *this;
-	}
-	FExcelQueryInfo& SetKeyName(FName InKeyName)
-	{
-		KeyName = InKeyName;
-		return *this;
-	}
-	FExcelQueryInfo& AddColumnQuest(FName InColumnName, FName InResultKey)
-	{
-		ColumnQuest.Add(InColumnName, InResultKey);
-		return *this;
-	}
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName TableName;	
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName TableName;
+	FExcelQueryKey Key;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName KeyName;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	TMap<FName, FName> ColumnQuest;
+	TArray<FName> Column;
 };
 
 USTRUCT(BlueprintType)
-struct FExcelQueryRequest
+struct FExcelQueryData
 {
 	GENERATED_BODY()
 
-	FExcelQueryRequest() : TaskID(NAME_None) {}
-	
-	FExcelQueryRequest(FName InTaskID) : TaskID(InTaskID) {}
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName TaskID;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	TArray<FExcelQueryInfo> QueryList;
+	void AddDefaultValue(const FString& InValue, FName InKeyName, FName InTableName = NAME_None)
+	{
+		FExcelQueryKey Key(InKeyName, InTableName);
+		DefaultData.Add(MoveTemp(Key), InValue);
+	}
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	TMap<FName, FString> Result;
+	TMap<FExcelQueryKey, FString> DefaultData;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TArray<FExcelQueryInfo> QueryList;	
+};
+
+USTRUCT(BlueprintType)
+struct FExcelQueryResultData
+{
+	GENERATED_BODY()
+
+	FString GetValue(FName InKeyName, FName InTableName = NAME_None) const
+	{
+		const FExcelQueryKey Key(InKeyName, InTableName);
+		if (Data.Contains(Key))
+		{
+			return Data[Key];
+		}
+		return FString();
+	}
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TMap<FExcelQueryKey, FString> Data;
 };
