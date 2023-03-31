@@ -1,5 +1,5 @@
-# DirectExcelAutoFill
-基于[DirectExcel 5.0版本](https://www.unrealengine.com/marketplace/en-US/product/directexcel)  扩展了用于自动根据Excel更新配置功能
+# Unreal Plugin DirectExcel 扩展
+基于[DirectExcel 5.0版本](https://www.unrealengine.com/marketplace/en-US/product/directexcel)  扩展了用于自动根据Excel更新配置功能, 不包含DirectExcel原始代码
 
 #### 接口 **IExcelAutoConfigInterface** 用于定义支持数据更新的Actor
 
